@@ -84,7 +84,7 @@ def save_pokemon_to_file(pokemon_details, file_path="pokemon_data.json"):
 def main():
     print("Welcome to the Pokémon game! ")
     while True:
-        user_input = input("Do you want to draw a Pokémon? Y/N: ").strip().upper()
+        user_input = input("Do you want to draw a Pokémon? Y/N:").strip().upper()
         if user_input == "Y":
             print("Game start!")
             pokemon_list = get_pokemon_list(limit=5)
