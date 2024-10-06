@@ -9,6 +9,7 @@ SUBNET_ID = 'subnet-0b939e0a4675dcbc3'
 SECURITY_GROUP_ID = 'sg-01304974040835e2f'  # Ensure the Security Group allows appropriate access
 INSTANCE_PROFILE = 'EC2-Admin'
 
+
 # User data script
 USER_DATA = '''#!/bin/bash
 yum update -y
