@@ -87,11 +87,16 @@ def main():
         user_input = input("Do you want to draw a Pokémon? Y/N:").strip().upper()
         if user_input == "Y":
             print("Game start!")
+
+
             pokemon_list = get_pokemon_list(limit=5)
             if pokemon_list is not None:
                 pokemon_details = get_pokemon_details(pokemon_list)
+                print("\nPokémons details retrieved:")
                 for pokemon in pokemon_details:
+                    print(f"Name: {pokemon['name']}, Height: {pokemon['height']}, Weight: {pokemon['weight']}")
                     save_pokemon_to_file(pokemon)
+
 
                 random_pokemon = get_random_pokemon_name()
                 if random_pokemon:
@@ -101,11 +106,13 @@ def main():
                         print(f"{pokemon_name} already exists in the file.")
                     else:
                         save_pokemon_to_file(random_pokemon)
-
+                        print(f"Random Pokémon added: {pokemon_name}, Height: {random_pokemon['height']}, Weight: {random_pokemon['weight']}")
             continue
+
         elif user_input == "N":
             print("Goodbye!")
             break
+
         else:
             print("Invalid answer, please enter Y/N.")
 
