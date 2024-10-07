@@ -2,7 +2,6 @@ import requests
 import json
 import random
 
-
 # Function to fetch a list of Pokémon
 def fetch_pokemon_list(limit=5):
     offset = random.randint(0, 1010 - limit)  # Random starting point in the list
@@ -16,7 +15,6 @@ def fetch_pokemon_list(limit=5):
         print(f"Error getting data: {response.status_code}")
         return None
 
-
 # Function to fetch Pokémon details using the URL
 def fetch_pokemon_details(pokemon_url):
     response = requests.get(pokemon_url)
@@ -27,11 +25,11 @@ def fetch_pokemon_details(pokemon_url):
             "name": pokemon_data['name'],
             "height": pokemon_data['height'],
             "weight": pokemon_data['weight']
+
         }
     else:
         print(f"Error fetching details from {pokemon_url}")
         return None
-
 
 # Function to check if a Pokémon already exists in the JSON file
 def check_pokemon_in_file(pokemon_name, file_path="pokemon_data.json"):
@@ -43,9 +41,7 @@ def check_pokemon_in_file(pokemon_name, file_path="pokemon_data.json"):
                     return True, pokemon  # Pokémon found
             return False, None  # Pokémon not found
     except FileNotFoundError:
-        print("File not found, please run the game first to create it.")
-        return False, None
-
+        return False, None  # File not found, treat as no existing Pokémon
 
 # Function to save Pokémon details to the JSON file
 def save_pokemon_to_file(pokemon_details, file_path="pokemon_data.json"):
@@ -59,14 +55,15 @@ def save_pokemon_to_file(pokemon_details, file_path="pokemon_data.json"):
         with open(file_path, 'w') as file:
             json.dump([pokemon_details], file, indent=2)  # Create a new file
 
+# Function to print Pokémon details nicely
+def print_pokemon_details(pokemon):
+    print(f"Name: {pokemon['name']}, Height: {pokemon['height']}, Weight: {pokemon['weight']}")
 
 # Main function to run the game
 def main():
-    print("Welcome to the Pokémon game! ")
+    print("Welcome to the Pokémon game!")
     while True:
-        print("\n")
-        user_input = input("Do you want to draw a Pokémon? Y/N:").strip().upper()
-        print("\n")
+        user_input = input("\nDo you want to draw a Pokémon? Y/N: ").strip().upper()
         if user_input == "Y":
             print("Game start!")
             pokemon_list = fetch_pokemon_list(limit=5)  # Fetch a list of Pokémon
@@ -78,7 +75,6 @@ def main():
                 print("Pokémon names retrieved:")
                 for pokemon in pokemon_details:
                     print(pokemon['name'])  # Show only the names of the Pokémon
-                    save_pokemon_to_file(pokemon)  # Save each Pokémon to the file
 
                 # Choose a random Pokémon from the details
                 random_pokemon = random.choice(pokemon_details)  # Choose a random Pokémon from the details
@@ -89,19 +85,17 @@ def main():
                 if exists:
                     print(f"\n{pokemon_name} already exists in the file.")
                     # Display existing Pokémon details
-                    print(
-                        f"Existing Pokémon details: Name: {existing_pokemon['name']}, Height: {existing_pokemon['height']}, Weight: {existing_pokemon['weight']}")
+                    print_pokemon_details(existing_pokemon)
                 else:
                     save_pokemon_to_file(random_pokemon)  # Save the new Pokémon to the file
-                    print(
-                        f"\nRandom Pokémon added: Name: {pokemon_name}, Height: {random_pokemon['height']}, Weight: {random_pokemon['weight']}")
+                    print(f"\nRandom Pokémon added:")
+                    print_pokemon_details(random_pokemon)
             continue
         elif user_input == "N":
             print("Goodbye!")
             break
         else:
             print("Invalid answer, please enter Y/N.")
-
 
 if __name__ == "__main__":
     main()
