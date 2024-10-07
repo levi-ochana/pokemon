@@ -1,179 +1,155 @@
-import os
 import subprocess
-import socket
+import sys
+import os
+import boto3
+import json
 
+# פונקציה להבטיח שהמודול boto3 מותקן
+def ensure_boto3_installed():
+    try:
+        import boto3
+    except ImportError:
+        print("boto3 לא מותקן. מתקין עכשיו...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "boto3"])
+        import boto3  # ניסיון לייבא שוב לאחר ההתקנה
+
+# קריאה לפונקציה
+ensure_boto3_installed()
 
 def run_command(command):
-    """Run a shell command and handle errors."""
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-    if process.returncode != 0:
-        raise Exception(f"Command failed with error: {stderr.decode('utf-8')}")
-    return stdout.decode('utf-8')
+    """Run a shell command and return its output."""
+    result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        print(f"Command failed with error: {result.stderr.strip()}")
+        return None
+    return result.stdout.strip()
 
-
-def check_and_install_python():
-    """Check if Python is installed, and install it if not."""
+def get_latest_ami():
+    """Get the latest Amazon Linux 2 AMI ID."""
     try:
-        run_command("python3 --version")  # Check if Python 3 is installed
-    except Exception:
-        print("Python is not installed. Installing Python...")
-        run_command("sudo yum install python3 -y")  # Install Python 3 if not installed
-
-
-def check_and_install_pip():
-    """Check if pip is installed, and install it if not."""
-    try:
-        run_command("pip3 --version")  # Check if pip is installed
-    except Exception:
-        print("pip is not installed. Installing pip...")
-        run_command("sudo yum install python3-pip -y")  # Install pip if not installed
-
-
-def setup_aws_cli():
-    """Check if AWS CLI is already configured, if not, install and configure it with user credentials."""
-    try:
-        run_command("aws --version")  # Check if AWS CLI is installed
-        config_output = run_command("aws configure list")  # List AWS CLI configuration
-        if "None" in config_output:  # Check if any configuration is missing
-            print("AWS CLI is not configured. Please provide your credentials.")
-            run_command("pip install awscli")  # Install AWS CLI if not installed
-            run_command("aws configure")  # Configure AWS CLI with user credentials
-        else:
-            print("AWS CLI is already configured.")
+        ami_info = run_command("aws ec2 describe-images --owners amazon --filters 'Name=name,Values=amzn2-ami-hvm-*-x86_64-gp2' --query 'Images[0].ImageId' --output text")
+        print(f"Using the latest AMI ID: {ami_info}")
+        return ami_info
     except Exception as e:
-        print(f"Error checking AWS CLI configuration: {e}")
-
+        print(f"Error fetching latest AMI: {e}")
+        return None
 
 def create_security_group():
-    """Create a security group and add inbound rules for SSH and HTTP."""
+    """Create a security group if it doesn't already exist."""
+    group_name = 'my-sg'
     try:
-        run_command(
-            "aws ec2 create-security-group --group-name my-sg --description 'My security group'")  # Create a new security group
-        # Add inbound rules for SSH (port 22) and HTTP (port 80)
-        run_command(
-            "aws ec2 authorize-security-group-ingress --group-name my-sg --protocol tcp --port 22 --cidr 0.0.0.0/0")
-        run_command(
-            "aws ec2 authorize-security-group-ingress --group-name my-sg --protocol tcp --port 80 --cidr 0.0.0.0/0")
-        print("Security group 'my-sg' created with rules for SSH and HTTP.")
+        # Check if the security group already exists
+        existing_group = run_command(f"aws ec2 describe-security-groups --group-names {group_name} --query 'SecurityGroups[0].GroupId' --output text")
+        if existing_group:
+            print(f"Security group '{group_name}' already exists.")
+            return
+        run_command(f"aws ec2 create-security-group --group-name {group_name} --description 'My security group'")
+        print(f"Security group '{group_name}' created.")
     except Exception as e:
         print(f"Error creating security group: {e}")
 
-
 def create_key_pair():
-    """Create an EC2 key pair for SSH access."""
+    """Create an EC2 key pair."""
+    key_name = 'MyKeyPair'
     try:
-        # Create a new key pair and save the private key to MyKeyPair.pem
-        run_command("aws ec2 create-key-pair --key-name MyKeyPair --query 'KeyMaterial' --output text > MyKeyPair.pem")
-        run_command("chmod 400 MyKeyPair.pem")  # Set permissions on the key file to be readable only by the user
+        run_command(f"aws ec2 create-key-pair --key-name {key_name} --query 'KeyMaterial' --output text > {key_name}.pem")
+        print(f"Key pair '{key_name}' created.")
+        # Change permissions of the key file
+        run_command(f"chmod 400 {key_name}.pem")
     except Exception as e:
         print(f"Error creating key pair: {e}")
 
-
-def launch_ec2_instance():
-    """Launch an EC2 instance with the specified parameters and return the public IP."""
+def launch_ec2_instance(ami_id):
+    """Launch an EC2 instance and return its public IP address."""
     try:
-        # Launch the EC2 instance using the specified AMI, instance type, key pair, and security group
-        output = run_command(
-            "aws ec2 run-instances --image-id ami-0c55b159cbfafe1f0 --count 1 --instance-type t2.micro --key-name MyKeyPair --security-groups my-sg --query 'Instances[0].InstanceId' --output text"
-        )
-        instance_id = output.strip()  # Get the instance ID
-        print(f"EC2 instance launched with Instance ID: {instance_id}")
+        instance_info = run_command(f"aws ec2 run-instances --image-id {ami_id} --count 1 --instance-type t2.micro --key-name MyKeyPair --security-groups my-sg --query 'Instances[0].InstanceId' --output text")
+        print(f"Instance launched: {instance_info}")
+        
+        # Wait until the instance is running
+        print("Waiting for instance to be in running state...")
+        run_command(f"aws ec2 wait instance-running --instance-ids {instance_info}")
 
-        # Get the public IP address of the launched instance
-        ip_output = run_command(
-            f"aws ec2 describe-instances --instance-ids {instance_id} --query 'Reservations[0].Instances[0].PublicIpAddress' --output text")
-        public_ip = ip_output.strip()
-
-        print(f"Public IP of the instance is: {public_ip}")
+        # Get public IP address
+        public_ip = run_command(f"aws ec2 describe-instances --instance-ids {instance_info} --query 'Reservations[0].Instances[0].PublicIpAddress' --output text")
         return public_ip
     except Exception as e:
         print(f"Error launching EC2 instance: {e}")
+        return None
 
-
-def connect_to_ec2(instance_ip):
-    """Connect to the EC2 instance via SSH."""
+def connect_to_ec2(public_ip):
+    """Connect to the EC2 instance using SSH."""
+    if public_ip is None:
+        print("No public IP available for the instance.")
+        return
     try:
-        # Check if the key file exists and has the correct permissions
-        if not os.path.isfile("MyKeyPair.pem"):
-            raise Exception("Key file MyKeyPair.pem does not exist.")
-
-        if not os.access("MyKeyPair.pem", os.R_OK):
-            raise Exception("Key file MyKeyPair.pem is not readable.")
-
-        # Ensure correct permissions
-        run_command("chmod 400 MyKeyPair.pem")  # Set permissions on the key file
-
-        # Get the local IP address to show which IP is connecting
-        local_ip = socket.gethostbyname(socket.gethostname())
-        print(f"Connecting to {instance_ip} from local IP {local_ip}...")
-
-        # Connect to the EC2 instance using SSH
-        os.system(f"ssh -i 'MyKeyPair.pem' ec2-user@{instance_ip}")
+        print(f"Connecting to {public_ip} from local IP {os.popen('hostname -I').read().strip()}...")
+        run_command(f"ssh -i MyKeyPair.pem ec2-user@{public_ip} 'echo Connected successfully!'")
     except Exception as e:
         print(f"Error connecting to EC2 instance: {e}")
 
-
-def setup_python_on_ec2():
-    """Update the system and install Python on the EC2 instance."""
+def setup_python_on_ec2(instance_id):
+    """Install Python on the EC2 instance."""
     try:
-        run_command("sudo yum update -y")  # Update the system packages
-        run_command("sudo yum install python3 -y")  # Install Python 3
-        run_command("pip3 install flask")  # Install Flask
+        run_command(f"aws ssm send-command --document-name 'AWS-RunShellScript' --targets 'Key=instanceids,Values={instance_id}' --parameters 'commands=sudo yum install -y python3'")
+        print("Python installed on the EC2 instance.")
     except Exception as e:
         print(f"Error setting up Python on EC2: {e}")
 
-
 def clone_app_from_github():
     """Clone the application repository from GitHub."""
+    if os.path.exists("pokemon"):
+        print("The directory 'pokemon' already exists. Skipping clone.")
+        return
     try:
         run_command("git clone https://github.com/levi-ochana/pokemon.git")  # Clone the specified GitHub repository
-        run_command("cd pokemon")  # Change to the cloned directory
+        print("Application cloned from GitHub.")
     except Exception as e:
         print(f"Error cloning app from GitHub: {e}")
 
-
 def run_app():
-    """Run the main application script."""
+    """Run the application on the EC2 instance."""
     try:
-        run_command("python3 deployment_for_pokemon.py")  # Replace with the actual script name
+        run_command("aws ssm send-command --document-name 'AWS-RunShellScript' --targets 'Key=instanceids,Values=<Your_Instance_ID>' --parameters 'commands=cd pokemon && python3 app.py'")
+        print("Application running on the EC2 instance.")
     except Exception as e:
         print(f"Error running the application: {e}")
 
-
 def create_startup_script():
-    """Create a startup script to run the application on instance boot."""
-    try:
-        # Create a new shell script to run the application
-        with open("start_app.sh", "w") as file:
-            file.write("#!/bin/bash\n")  # Indicate this is a bash script
-            file.write("cd /home/ec2-user/pokemon\n")  # Change to the application directory
-            file.write("python3 deployment_for_pokemon.py\n")  # Run the main application script
-        run_command("chmod +x start_app.sh")  # Make the script executable
-        # Schedule the script to run at boot time
-        run_command("crontab -l | { cat; echo '@reboot /home/ec2-user/start_app.sh'; } | crontab -")
-    except Exception as e:
-        print(f"Error creating startup script: {e}")
-
+    """Create a startup script to run the application on boot."""
+    startup_script = """#!/bin/bash
+    cd /path/to/pokemon  # עדכן את הנתיב בהתאם למיקום התיקיה של האפליקציה שלך
+    python3 app.py &
+    """
+    with open("startup.sh", "w") as f:
+        f.write(startup_script)
+    run_command("chmod +x startup.sh")
+    print("Startup script created.")
 
 def main():
     """Main function to orchestrate the deployment process."""
     try:
-        check_and_install_python()  # Check and install Python
-        check_and_install_pip()  # Check and install pip
-        setup_aws_cli()  # Check and configure AWS CLI
+        ami_id = get_latest_ami()  # Get the latest AMI ID
+        if not ami_id:
+            print("No valid AMI ID found. Exiting...")
+            return
+        
         create_security_group()  # Create security group
         create_key_pair()  # Create key pair for SSH access
-        public_ip = launch_ec2_instance()  # Launch EC2 instance and get its public IP
+        public_ip = launch_ec2_instance(ami_id)  # Launch EC2 instance and get its public IP
+        
+        if public_ip is None:
+            print("No public IP available for the instance.")
+            return
+        
         connect_to_ec2(public_ip)  # Connect to the EC2 instance
-        setup_python_on_ec2()  # Setup Python on the EC2 instance
+        instance_id = run_command(f"aws ec2 describe-instances --filters 'Name=ip-address,Values={public_ip}' --query 'Reservations[0].Instances[0].InstanceId' --output text")
+        setup_python_on_ec2(instance_id)  # Setup Python on the EC2 instance
         clone_app_from_github()  # Clone the application from GitHub
         run_app()  # Run the application
         create_startup_script()  # Create a startup script to run the application on boot
         print("App deployed successfully!")
     except Exception as e:
         print(f"An error occurred in the deployment process: {e}")
-
 
 if __name__ == "__main__":
     main()  # Run the main function
