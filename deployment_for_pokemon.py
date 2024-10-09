@@ -49,8 +49,8 @@ def manage_key_pair(key_name):
 def find_default_vpc(region="us-west-2"):
     vpcs = run_aws_command(["aws", "ec2", "describe-vpcs", "--region", region])
     if vpcs:
-        vpcs = json.loads(vpcs)['Vpcs']
-        for vpc in vpcs:
+        vpcs = json.loads(vpcs)  # Parsing once and storing
+        for vpc in vpcs['Vpcs']:
             if vpc.get('IsDefault', False):
                 print(f"Found default VPC: {vpc['VpcId']}")
                 return vpc['VpcId']
@@ -64,10 +64,12 @@ def create_security_group(group_name, vpc_id, description="Security group for Po
         f"Name=vpc-id,Values={vpc_id}", f"Name=group-name,Values={group_name}", "--region", "us-west-2"
     ])
     
-    if security_group_info and json.loads(security_group_info)['SecurityGroups']:
-        security_group_id = json.loads(security_group_info)['SecurityGroups'][0]['GroupId']
-        print(f"Security Group {group_name} already exists. ID: {security_group_id}")
-        return security_group_id
+    if security_group_info:
+        security_groups = json.loads(security_group_info)  # Parsing once and storing
+        if security_groups['SecurityGroups']:
+            security_group_id = security_groups['SecurityGroups'][0]['GroupId']
+            print(f"Security Group {group_name} already exists. ID: {security_group_id}")
+            return security_group_id
     
     security_group_id = run_aws_command([
         "aws", "ec2", "create-security-group", "--group-name", group_name,
