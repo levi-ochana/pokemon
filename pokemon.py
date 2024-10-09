@@ -25,7 +25,6 @@ def fetch_pokemon_details(pokemon_url):
             "name": pokemon_data['name'],
             "height": pokemon_data['height'],
             "weight": pokemon_data['weight']
-
         }
     else:
         print(f"Error fetching details from {pokemon_url}")
