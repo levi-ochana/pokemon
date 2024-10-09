@@ -1,155 +1,159 @@
-import subprocess
-import sys
 import os
-import boto3
+import subprocess
 import json
 
-# פונקציה להבטיח שהמודול boto3 מותקן
-def ensure_boto3_installed():
+# Function to check if the key file exists and is readable
+def check_key_file(key_file):
+    if not os.path.exists(key_file):
+        print(f"Key file does not exist: {key_file}")
+        return False
+    if not os.access(key_file, os.R_OK):
+        print(f"Key file is not readable: {key_file}")
+        return False
+    return True
+
+# Function to create a new key pair
+def create_key_pair(key_name):
     try:
-        import boto3
-    except ImportError:
-        print("boto3 לא מותקן. מתקין עכשיו...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "boto3"])
-        import boto3  # ניסיון לייבא שוב לאחר ההתקנה
+        command = [
+            "aws", "ec2", "create-key-pair",
+            "--key-name", key_name,
+            "--query", "KeyMaterial",
+            "--output", "text",
+            "--region", "us-west-2"
+        ]
+        key_material = subprocess.check_output(command).decode('utf-8').strip()
 
-# קריאה לפונקציה
-ensure_boto3_installed()
+        key_file_path = os.path.expanduser(f"~/.ssh/{key_name}.pem")
+        with open(key_file_path, 'w') as key_file:
+            key_file.write(key_material)
 
-def run_command(command):
-    """Run a shell command and return its output."""
-    result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        print(f"Command failed with error: {result.stderr.strip()}")
+        # Change permissions
+        os.chmod(key_file_path, 0o400)
+        print(f"Created key pair and saved to {key_file_path}")
+        return key_file_path
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error creating key pair: {e.output.decode('utf-8')}")
         return None
-    return result.stdout.strip()
 
-def get_latest_ami():
-    """Get the latest Amazon Linux 2 AMI ID."""
+# Function to find a suitable VPC
+def find_default_vpc(region="us-west-2"):
     try:
-        ami_info = run_command("aws ec2 describe-images --owners amazon --filters 'Name=name,Values=amzn2-ami-hvm-*-x86_64-gp2' --query 'Images[0].ImageId' --output text")
-        print(f"Using the latest AMI ID: {ami_info}")
-        return ami_info
-    except Exception as e:
-        print(f"Error fetching latest AMI: {e}")
-        return None
-
-def create_security_group():
-    """Create a security group if it doesn't already exist."""
-    group_name = 'my-sg'
-    try:
-        # Check if the security group already exists
-        existing_group = run_command(f"aws ec2 describe-security-groups --group-names {group_name} --query 'SecurityGroups[0].GroupId' --output text")
-        if existing_group:
-            print(f"Security group '{group_name}' already exists.")
-            return
-        run_command(f"aws ec2 create-security-group --group-name {group_name} --description 'My security group'")
-        print(f"Security group '{group_name}' created.")
-    except Exception as e:
-        print(f"Error creating security group: {e}")
-
-def create_key_pair():
-    """Create an EC2 key pair."""
-    key_name = 'MyKeyPair'
-    try:
-        run_command(f"aws ec2 create-key-pair --key-name {key_name} --query 'KeyMaterial' --output text > {key_name}.pem")
-        print(f"Key pair '{key_name}' created.")
-        # Change permissions of the key file
-        run_command(f"chmod 400 {key_name}.pem")
-    except Exception as e:
-        print(f"Error creating key pair: {e}")
-
-def launch_ec2_instance(ami_id):
-    """Launch an EC2 instance and return its public IP address."""
-    try:
-        instance_info = run_command(f"aws ec2 run-instances --image-id {ami_id} --count 1 --instance-type t2.micro --key-name MyKeyPair --security-groups my-sg --query 'Instances[0].InstanceId' --output text")
-        print(f"Instance launched: {instance_info}")
+        command = ["aws", "ec2", "describe-vpcs", "--region", region]
+        output = subprocess.check_output(command).decode('utf-8')
+        vpcs = json.loads(output)['Vpcs']
         
-        # Wait until the instance is running
-        print("Waiting for instance to be in running state...")
-        run_command(f"aws ec2 wait instance-running --instance-ids {instance_info}")
-
-        # Get public IP address
-        public_ip = run_command(f"aws ec2 describe-instances --instance-ids {instance_info} --query 'Reservations[0].Instances[0].PublicIpAddress' --output text")
-        return public_ip
-    except Exception as e:
-        print(f"Error launching EC2 instance: {e}")
+        # Check for a default VPC
+        for vpc in vpcs:
+            if vpc.get('IsDefault', False):
+                print(f"Found default VPC: {vpc['VpcId']}")
+                return vpc['VpcId']
+        
+        print("No default VPC found.")
+        return None
+    except subprocess.CalledProcessError as e:
+        print(f"Error finding VPC: {e.output.decode('utf-8')}")
         return None
 
-def connect_to_ec2(public_ip):
-    """Connect to the EC2 instance using SSH."""
-    if public_ip is None:
-        print("No public IP available for the instance.")
-        return
+# Function to create or retrieve a security group in a specific VPC
+def create_or_get_security_group(group_name, vpc_id, description="Security group for Pokemon app"):
     try:
-        print(f"Connecting to {public_ip} from local IP {os.popen('hostname -I').read().strip()}...")
-        run_command(f"ssh -i MyKeyPair.pem ec2-user@{public_ip} 'echo Connected successfully!'")
-    except Exception as e:
-        print(f"Error connecting to EC2 instance: {e}")
+        # Check if the security group exists in the specified VPC
+        command = ["aws", "ec2", "describe-security-groups", "--filters", f"Name=vpc-id,Values={vpc_id}", f"Name=group-name,Values={group_name}", "--region", "us-west-2"]
+        output = subprocess.check_output(command).decode('utf-8')
+        security_group_info = json.loads(output)
 
-def setup_python_on_ec2(instance_id):
-    """Install Python on the EC2 instance."""
+        if security_group_info['SecurityGroups']:
+            security_group_id = security_group_info['SecurityGroups'][0]['GroupId']
+            print(f"Security Group {group_name} already exists. ID: {security_group_id}")
+            return security_group_id
+        else:
+            # Create a new security group in the specified VPC
+            command = ["aws", "ec2", "create-security-group", "--group-name", group_name, "--description", description, "--vpc-id", vpc_id, "--region", "us-west-2"]
+            security_group_output = subprocess.check_output(command).decode('utf-8').strip()
+            security_group_id = json.loads(security_group_output)['GroupId']
+            print(f"Created new Security Group: {security_group_id}")
+
+            # Add ingress rules
+            authorize_ingress(security_group_id)
+            return security_group_id
+            
+    except subprocess.CalledProcessError as e:
+        print(f"Error checking security group: {e.output.decode('utf-8')}")
+        return None
+
+# Function to authorize ingress for the security group
+def authorize_ingress(security_group_id):
     try:
-        run_command(f"aws ssm send-command --document-name 'AWS-RunShellScript' --targets 'Key=instanceids,Values={instance_id}' --parameters 'commands=sudo yum install -y python3'")
-        print("Python installed on the EC2 instance.")
-    except Exception as e:
-        print(f"Error setting up Python on EC2: {e}")
+        command = ["aws", "ec2", "authorize-security-group-ingress",
+                   "--group-id", security_group_id,
+                   "--protocol", "tcp",
+                   "--port", "22",
+                   "--cidr", "0.0.0.0/0",
+                   "--region", "us-west-2"]
+        subprocess.check_output(command)
+        print("Ingress rules added to Security Group.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error adding ingress rules: {e.output.decode('utf-8')}")
 
-def clone_app_from_github():
-    """Clone the application repository from GitHub."""
-    if os.path.exists("pokemon"):
-        print("The directory 'pokemon' already exists. Skipping clone.")
-        return
+# Function to run the EC2 instance
+def run_ec2_instance(ami_id, security_group_id, key_name):
     try:
-        run_command("git clone https://github.com/levi-ochana/pokemon.git")  # Clone the specified GitHub repository
-        print("Application cloned from GitHub.")
-    except Exception as e:
-        print(f"Error cloning app from GitHub: {e}")
+        user_data_script = """#!/bin/bash
+        sudo yum update -y
+        sudo yum install -y git python3 python3-pip
+        pip3 install requests boto3
+        git clone https://github.com/levi-ochana/pokemon.git /home/ec2-user/pokemon_app
+        cd /home/ec2-user/pokemon_app
+        pip3 install -r requirements.txt
+        echo "Welcome to the Pokémon App! Use this app to draw Pokémon." | sudo tee /etc/motd
+        """
 
-def run_app():
-    """Run the application on the EC2 instance."""
-    try:
-        run_command("aws ssm send-command --document-name 'AWS-RunShellScript' --targets 'Key=instanceids,Values=<Your_Instance_ID>' --parameters 'commands=cd pokemon && python3 app.py'")
-        print("Application running on the EC2 instance.")
-    except Exception as e:
-        print(f"Error running the application: {e}")
-
-def create_startup_script():
-    """Create a startup script to run the application on boot."""
-    startup_script = """#!/bin/bash
-    cd /path/to/pokemon  # עדכן את הנתיב בהתאם למיקום התיקיה של האפליקציה שלך
-    python3 app.py &
-    """
-    with open("startup.sh", "w") as f:
-        f.write(startup_script)
-    run_command("chmod +x startup.sh")
-    print("Startup script created.")
+        command = [
+            "aws", "ec2", "run-instances",
+            "--image-id", ami_id,
+            "--count", "1",
+            "--instance-type", "t2.micro",
+            "--key-name", key_name,
+            "--security-group-ids", security_group_id,
+            "--user-data", user_data_script,
+            "--query", "Instances[0].InstanceId",
+            "--output", "text",
+            "--region", "us-west-2"
+        ]
+        instance_id = subprocess.check_output(command).decode('utf-8').strip()
+        print(f"EC2 Instance launched with ID: {instance_id}")
+        return instance_id
+    except subprocess.CalledProcessError as e:
+        print(f"Error launching instance: {e.output.decode('utf-8')}")
 
 def main():
-    """Main function to orchestrate the deployment process."""
-    try:
-        ami_id = get_latest_ami()  # Get the latest AMI ID
-        if not ami_id:
-            print("No valid AMI ID found. Exiting...")
-            return
-        
-        create_security_group()  # Create security group
-        create_key_pair()  # Create key pair for SSH access
-        public_ip = launch_ec2_instance(ami_id)  # Launch EC2 instance and get its public IP
-        
-        if public_ip is None:
-            print("No public IP available for the instance.")
-            return
-        
-        connect_to_ec2(public_ip)  # Connect to the EC2 instance
-        instance_id = run_command(f"aws ec2 describe-instances --filters 'Name=ip-address,Values={public_ip}' --query 'Reservations[0].Instances[0].InstanceId' --output text")
-        setup_python_on_ec2(instance_id)  # Setup Python on the EC2 instance
-        clone_app_from_github()  # Clone the application from GitHub
-        run_app()  # Run the application
-        create_startup_script()  # Create a startup script to run the application on boot
-        print("App deployed successfully!")
-    except Exception as e:
-        print(f"An error occurred in the deployment process: {e}")
+    key_name = "my-key-pair"
+    key_file = os.path.expanduser(f"~/.ssh/{key_name}.pem")
+
+    # Check if the key file exists; if not, create it
+    if not os.path.exists(key_file):
+        key_file = create_key_pair(key_name)
+        if not key_file:
+            return  # Stop if key creation failed
+
+    if not check_key_file(key_file):
+        return
+
+    ami_id = "ami-0992959aaea5762e8"
+    security_group_name = "PokemonAppSG"
+
+    # Find a suitable VPC
+    vpc_id = find_default_vpc()
+
+    if vpc_id:
+        # Create or get the security group
+        security_group_id = create_or_get_security_group(security_group_name, vpc_id)
+
+        if security_group_id:
+            # Run the EC2 instance
+            run_ec2_instance(ami_id, security_group_id, key_name)
 
 if __name__ == "__main__":
-    main()  # Run the main function
+    main()
