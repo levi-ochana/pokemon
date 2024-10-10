@@ -32,7 +32,6 @@ def check_or_create_pem(key_name="my-key-pair"):
 # Function to launch an EC2 instance
 def launch_instance(ami_id, key_name, security_group_id, subnet_id):
     user_data_script = '''#!/bin/bash
-    sudo yum update -y
     sudo yum install -y python3 python3-pip git
     pip3 install requests
     git clone https://github.com/levi-ochana/pokemon.git
