@@ -2,35 +2,35 @@ import requests
 import json
 import random
 
-# Function to fetch a list of Pokémon
-def fetch_pokemon_list(limit=5):
-    offset = random.randint(0, 1010 - limit)  # Random starting point in the list
-    url = f"https://pokeapi.co/api/v2/pokemon?limit={limit}&offset={offset}"
-    response = requests.get(url)
-
-    # If the response is successful, return the results
+# Function to check the status of the response
+def check_response_status(response):
     if response.status_code == 200:
-        return response.json().get('results', [])
+        return response.json()
     else:
         print(f"Error getting data: {response.status_code}")
         return None
 
-# Function to fetch Pokémon details using the URL
+# Function to fetch a list of Pokémon
+def fetch_pokemon_list(limit=5):
+    offset = random.randint(0, 1010 - limit)  # Random starting point
+    url = f"https://pokeapi.co/api/v2/pokemon?limit={limit}&offset={offset}"
+    response = requests.get(url)
+    data = check_response_status(response)
+    return data.get('results', []) if data else None
+
+# Function to fetch Pokémon details by URL
 def fetch_pokemon_details(pokemon_url):
     response = requests.get(pokemon_url)
-    # If the response is successful, return the details
-    if response.status_code == 200:
-        pokemon_data = response.json()
+    data = check_response_status(response)
+    if data:
         return {
-            "name": pokemon_data['name'],
-            "height": pokemon_data['height'],
-            "weight": pokemon_data['weight']
+            "name": data['name'],
+            "height": data['height'],
+            "weight": data['weight']
         }
-    else:
-        print(f"Error fetching details from {pokemon_url}")
-        return None
+    return None
 
-# Function to check if a Pokémon already exists in the JSON file
+# Function to check if a Pokémon exists in the JSON file
 def check_pokemon_in_file(pokemon_name, file_path="pokemon_data.json"):
     try:
         with open(file_path, 'r') as file:
@@ -40,21 +40,21 @@ def check_pokemon_in_file(pokemon_name, file_path="pokemon_data.json"):
                     return True, pokemon  # Pokémon found
             return False, None  # Pokémon not found
     except FileNotFoundError:
-        return False, None  # File not found, treat as no existing Pokémon
+        return False, None  # File not found, treat as if no Pokémon exist
 
-# Function to save Pokémon details to the JSON file
+# Function to save Pokémon details to a JSON file
 def save_pokemon_to_file(pokemon_details, file_path="pokemon_data.json"):
     try:
         with open(file_path, 'r+') as file:
             pokemon_data = json.load(file)
             pokemon_data.append(pokemon_details)  # Append new Pokémon details
-            file.seek(0)  # Move the cursor back to the start of the file
+            file.seek(0)  # Move cursor back to the start of the file
             json.dump(pokemon_data, file, indent=2)
     except FileNotFoundError:
         with open(file_path, 'w') as file:
             json.dump([pokemon_details], file, indent=2)  # Create a new file
 
-# Function to print Pokémon details nicely
+# Function to print Pokémon details
 def print_pokemon_details(pokemon):
     print(f"Name: {pokemon['name']}, Height: {pokemon['height']}, Weight: {pokemon['weight']}")
 
@@ -66,17 +66,17 @@ def main():
         if user_input == "Y":
             print("Game start!")
             pokemon_list = fetch_pokemon_list(limit=5)  # Fetch a list of Pokémon
-            if pokemon_list is not None:
-                # Fetch details for each Pokémon in the list
-                pokemon_details = [fetch_pokemon_details(pokemon['url']) for pokemon in pokemon_list]
+            if pokemon_list:
+                # Fetch details for each Pokémon
+                pokemon_details_list = [fetch_pokemon_details(pokemon['url']) for pokemon in pokemon_list if fetch_pokemon_details(pokemon['url'])]
 
                 # Display fetched Pokémon names
                 print("Pokémon names retrieved:")
-                for pokemon in pokemon_details:
-                    print(pokemon['name'])  # Show only the names of the Pokémon
+                for pokemon in pokemon_details_list:
+                    print(pokemon['name'])  # Display names
 
-                # Choose a random Pokémon from the details
-                random_pokemon = random.choice(pokemon_details)  # Choose a random Pokémon from the details
+                # Choose a random Pokémon
+                random_pokemon = random.choice(pokemon_details_list)  
                 pokemon_name = random_pokemon['name']
 
                 # Check if the random Pokémon already exists in the file
@@ -86,7 +86,7 @@ def main():
                     # Display existing Pokémon details
                     print_pokemon_details(existing_pokemon)
                 else:
-                    save_pokemon_to_file(random_pokemon)  # Save the new Pokémon to the file
+                    save_pokemon_to_file(random_pokemon)  # Save new Pokémon to the file
                     print(f"\nRandom Pokémon added:")
                     print_pokemon_details(random_pokemon)
             continue
