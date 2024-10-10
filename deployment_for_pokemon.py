@@ -1,172 +1,156 @@
+import boto3
 import os
-import subprocess
-import json
 import time
 
-# Function to execute AWS CLI command and return output
-def run_aws_command(command):
+
+# Initialize EC2 resource and client
+ec2 = boto3.resource('ec2')
+client = boto3.client('ec2')
+
+# Function to check if a key pair exists, if not create a new one
+def check_or_create_pem(key_name="my-key-pair"):
     try:
-        return subprocess.check_output(command).decode('utf-8').strip()
-    except subprocess.CalledProcessError as e:
-        print(f"Error: {e.output.decode('utf-8')}")
-        return None
-
-# Key pair management - create or replace if exists
-def manage_key_pair(key_name):
-    key_file_path = os.path.expanduser(f"~/.ssh/{key_name}.pem")
-    
-    # Check if the key file exists and change permissions to 600 if it does
-    if os.path.exists(key_file_path):
-        os.chmod(key_file_path, 0o600)
-        print(f"Changed permissions to 600 for existing key file: {key_file_path}")
-    
-    # Check if key pair exists in AWS and delete if necessary
-    key_pair_exists = run_aws_command([
-        "aws", "ec2", "describe-key-pairs", "--key-names", key_name, "--region", "us-west-2"
-    ])
-
-    if key_pair_exists:
-        print(f"Key pair {key_name} exists, recreating...")
-        run_aws_command(["aws", "ec2", "delete-key-pair", "--key-name", key_name, "--region", "us-west-2"])
-
-    # Create a new key pair
-    key_material = run_aws_command([
-        "aws", "ec2", "create-key-pair", "--key-name", key_name, "--query", "KeyMaterial", "--output", "text", "--region", "us-west-2"
-    ])
-    
-    if key_material:
-        with open(key_file_path, 'w') as key_file:
-            key_file.write(key_material)
-        
-        # Change permissions to 600 after creating the new key pair
-        os.chmod(key_file_path, 0o600)
-        print(f"Key pair created and saved to {key_file_path}. Permissions set to 600.")
-        
-        return key_file_path
-    return None
-
-# Function to find a suitable VPC
-def find_default_vpc(region="us-west-2"):
-    vpcs = run_aws_command(["aws", "ec2", "describe-vpcs", "--region", region])
-    if vpcs:
-        vpcs = json.loads(vpcs)  # Parsing once and storing
-        for vpc in vpcs['Vpcs']:
-            if vpc.get('IsDefault', False):
-                print(f"Found default VPC: {vpc['VpcId']}")
-                return vpc['VpcId']
-    print("No default VPC found.")
-    return None
-
-# Security group creation or retrieval
-def create_security_group(group_name, vpc_id, description="Security group for Pokemon app"):
-    security_group_info = run_aws_command([
-        "aws", "ec2", "describe-security-groups", "--filters",
-        f"Name=vpc-id,Values={vpc_id}", f"Name=group-name,Values={group_name}", "--region", "us-west-2"
-    ])
-    
-    if security_group_info:
-        security_groups = json.loads(security_group_info)  # Parsing once and storing
-        if security_groups['SecurityGroups']:
-            security_group_id = security_groups['SecurityGroups'][0]['GroupId']
-            print(f"Security Group {group_name} already exists. ID: {security_group_id}")
-            return security_group_id
-    
-    security_group_id = run_aws_command([
-        "aws", "ec2", "create-security-group", "--group-name", group_name,
-        "--description", description, "--vpc-id", vpc_id, "--region", "us-west-2"
-    ])
-    
-    if security_group_id:
-        print(f"Security Group created: {security_group_id}")
-        run_aws_command([
-            "aws", "ec2", "authorize-security-group-ingress", "--group-id", security_group_id,
-            "--protocol", "tcp", "--port", "22", "--cidr", "0.0.0.0/0", "--region", "us-west-2"
-        ])
-        print("Ingress rules added to Security Group.")
-    return security_group_id
-
-# Function to get the Public IP of the instance
-def get_instance_public_ip(instance_id):
-    public_ip = run_aws_command([
-        "aws", "ec2", "describe-instances",
-        "--instance-ids", instance_id,
-        "--query", "Reservations[0].Instances[0].PublicIpAddress",
-        "--output", "text",
-        "--region", "us-west-2"
-    ])
-    return public_ip
-
-# Function to run the EC2 instance and offer SSH connection
-def run_ec2_instance(ami_id, security_group_id, key_name):
-    user_data_script = """#!/bin/bash
-    sudo yum update -y
-    sudo yum install -y git python3 python3-pip
-    pip3 install requests boto3
-    git clone https://github.com/levi-ochana/pokemon.git /home/ec2-user/pokemon_app
-    cd /home/ec2-user/pokemon_app
-    pip3 install -r requirements.txt
-    pip3 install urllib3==1.26.15
-    sudo chown -R ec2-user:ec2-user /home/ec2-user/pokemon_app
-    sudo chmod -R 755 /home/ec2-user/pokemon_app
-
-    echo "Welcome to the Pokémon App! Use this app to draw Pokémon." | sudo tee /etc/motd
-    """
-
-    instance_id = run_aws_command([
-        "aws", "ec2", "run-instances",
-        "--image-id", ami_id, "--count", "1", "--instance-type", "t2.micro",
-        "--key-name", key_name, "--security-group-ids", security_group_id,
-        "--user-data", user_data_script, "--query", "Instances[0].InstanceId",
-        "--output", "text", "--region", "us-west-2"
-    ])
-    
-    if instance_id:
-        print(f"EC2 Instance launched with ID: {instance_id}")
-        
-        # Delay to give the instance time to initialize
-        time.sleep(10)
-
-        # Get the Public IP of the instance
-        public_ip = get_instance_public_ip(instance_id)
-        if public_ip:
-            print(f"Public IP: {public_ip}")
-
-            # Ask the user if they want to connect via SSH
-            connect_ssh = input("Do you want to connect to the instance via SSH? (yes/no): ").strip().lower()
-            if connect_ssh == 'yes':
-                # Create the SSH command and connect
-                ssh_command = f"ssh -i ~/.ssh/{key_name}.pem ec2-user@{public_ip}"
-                print(f"Connecting with command: {ssh_command}")
-                os.system(ssh_command)  # Execute the SSH command
-            else:
-                print("You chose not to connect via SSH.")
+        response = client.describe_key_pairs(KeyNames=[key_name])
+        print(f"Key pair {key_name} already exists.")
+        return key_name
+    except client.exceptions.ClientError as e:
+        if 'InvalidKeyPair.NotFound' in str(e):
+            print(f"Key pair {key_name} not found, creating a new one.")
+            # Create a new key pair
+            key_pair = client.create_key_pair(KeyName=key_name)
+            # Save the PEM file
+            pem_file_path = f'~/.ssh/{key_name}.pem'
+            with open(os.path.expanduser(pem_file_path), 'w') as file:
+                file.write(key_pair['KeyMaterial'])
+            os.chmod(os.path.expanduser(pem_file_path), 0o400)  # Set file permissions
+            print(f"Key pair {key_name} created and saved to {pem_file_path}")
+            return key_name
         else:
-            print("Unable to retrieve the Public IP.")
-        
-        return instance_id
-    return None
+            raise e
 
-# Main function
+
+# Function to launch an EC2 instance
+def launch_instance(ami_id, key_name, security_group_id, subnet_id):
+    user_data_script = '''#!/bin/bash
+    sudo yum update -y
+    sudo yum install -y python3 python3-pip git
+    pip3 install requests
+    git clone https://github.com/levi-ochana/pokemon.git
+    '''
+    
+    instance = ec2.create_instances(
+        ImageId=ami_id,
+        InstanceType='t2.micro',
+        KeyName=key_name,
+        MaxCount=1,
+        MinCount=1,
+        SecurityGroupIds=[security_group_id],
+        SubnetId=subnet_id,
+        UserData=user_data_script  # Pass the User Data script here
+    )[0]
+    
+    print(f"Instance {instance.id} launched.")
+    instance.wait_until_running()
+    instance.load()  # Refresh instance data
+    
+    # Wait for User Data script to complete
+    while True:
+        console_output = client.get_console_output(InstanceId=instance.id)
+        if console_output['Output'] and ('Complete' in console_output['Output'] or 'Failed' in console_output['Output']):
+            print("User Data script has completed.")
+            break
+        print("Waiting for User Data script to complete...")
+        time.sleep(10)  # Wait for 10 seconds before checking again
+    
+    return instance
+
+
+# Function to get a valid subnet ID from the VPC
+def get_subnet_id(vpc_id):
+    response = client.describe_subnets(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])
+    if response['Subnets']:
+        subnet_id = response['Subnets'][0]['SubnetId']
+        print(f"Using subnet: {subnet_id} from VPC: {vpc_id}")
+        return subnet_id
+    else:
+        raise Exception("No available subnets in the specified VPC.")
+
+# Function to get the default VPC
+def get_default_vpc():
+    response = client.describe_vpcs()
+    for vpc in response['Vpcs']:
+        if vpc['IsDefault']:
+            print(f"Using default VPC: {vpc['VpcId']}")
+            return vpc['VpcId']
+    raise Exception("No default VPC found.")
+
+# Function to check or create a security group
+def check_or_create_security_group(vpc_id, group_name="my-security-group"):
+    try:
+        response = client.describe_security_groups(GroupNames=[group_name])
+        security_group_id = response['SecurityGroups'][0]['GroupId']
+        print(f"Security group {group_name} already exists with ID {security_group_id}.")
+        return security_group_id
+    except client.exceptions.ClientError as e:
+        if 'InvalidGroup.NotFound' in str(e):
+            print(f"Security group {group_name} not found, creating a new one.")
+            security_group = client.create_security_group(GroupName=group_name, Description='My security group', VpcId=vpc_id)
+            security_group_id = security_group['GroupId']
+            # Add inbound rules (allow SSH and HTTP)
+            client.authorize_security_group_ingress(
+                GroupId=security_group_id,
+                IpPermissions=[
+                    {
+                        'IpProtocol': 'tcp',
+                        'FromPort': 22,
+                        'ToPort': 22,
+                        'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                    },
+                    {
+                        'IpProtocol': 'tcp',
+                        'FromPort': 80,
+                        'ToPort': 80,
+                        'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
+                    }
+                ]
+            )
+            print(f"Security group {group_name} created with ID {security_group_id}.")
+            return security_group_id
+        else:
+            raise e
+
+# Function to get the latest Amazon Linux 2 AMI
+def get_latest_ami():
+    response = client.describe_images(
+        Owners=['amazon'],
+        Filters=[{'Name': 'name', 'Values': ['amzn2-ami-hvm-*-x86_64-gp2']}]
+    )
+    amis = sorted(response['Images'], key=lambda x: x['CreationDate'], reverse=True)
+    ami_id = amis[0]['ImageId']
+    print(f"Using AMI: {ami_id}")
+    return ami_id
+
+# Main workflow
 def main():
-    key_name = "my-key-pair"
-    key_file = manage_key_pair(key_name)  # This will handle both creation and replacement
+    # Check or create PEM file
+    key_name = check_or_create_pem()
 
-    if not key_file:
-        return
+    # Get default VPC and check/create security group
+    vpc_id = get_default_vpc()
+    security_group_id = check_or_create_security_group(vpc_id)
 
-    ami_id = "ami-0992959aaea5762e8"
-    security_group_name = "PokemonAppSG"
+    # Get a valid subnet ID
+    subnet_id = get_subnet_id(vpc_id)
+    
+    # Find an AMI and launch the instance
+    ami_id = get_latest_ami()
+    instance = launch_instance(ami_id, key_name, security_group_id, subnet_id)  # Pass the valid subnet ID
+    
+    
+    # Ask if the user wants to connect to the instance via SSH
+    connect = input("Do you want to connect to the EC2 instance? (Y/N): ").strip().upper()
+    if connect == 'Y':
+        os.system(f"ssh -i ~/.ssh/{key_name}.pem ec2-user@{instance.public_ip_address}")
 
-    # Find a suitable VPC
-    vpc_id = find_default_vpc()
-
-    if vpc_id:
-        # Create or get the security group
-        security_group_id = create_security_group(security_group_name, vpc_id)
-
-        if security_group_id:
-            # Run the EC2 instance
-            run_ec2_instance(ami_id, security_group_id, key_name)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
