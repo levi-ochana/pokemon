@@ -60,7 +60,7 @@ def launch_instance(ami_id, key_name, security_group_id, subnet_id):
             print("User Data script has completed.")
             break
         print("Waiting for User Data script to complete...")
-        time.sleep(10)  # Wait for 10 seconds before checking again
+        time.sleep(30)  # Wait for 30 seconds before checking again
     
     return instance
 
