@@ -45,7 +45,7 @@ def launch_instance(ami_id, key_name, security_group_id, subnet_id):
         MinCount=1,
         SecurityGroupIds=[security_group_id],
         SubnetId=subnet_id,
-        UserData=user_data_script  # Pass the User Data script here
+        UserData=user_data_script  
     )[0]
     
     print(f"Instance {instance.id} launched.")
@@ -143,7 +143,7 @@ def main():
     
     # Find an AMI and launch the instance
     ami_id = get_latest_ami()
-    instance = launch_instance(ami_id, key_name, security_group_id, subnet_id)  # Pass the valid subnet ID
+    instance = launch_instance(ami_id, key_name, security_group_id, subnet_id)  
     
     
     # Ask if the user wants to connect to the instance via SSH
